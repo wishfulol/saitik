@@ -1,0 +1,1078 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>UNIT-04 // Интерактивный CAD-вьюер</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <style>
+    :root {
+      --bg-viewport: #F2F1ED;
+      --bg-panel: #F8F7F4;
+      --border-hairline: #D6D3CB;
+      --ink-primary: #18181B;
+      --ink-secondary: #6E6D68;
+      --accent-orange: #E84C22;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: var(--bg-viewport);
+      color: var(--ink-primary);
+      overflow-x: hidden;
+    }
+
+    .font-mono-tech {
+      font-family: 'JetBrains Mono', Consolas, monospace;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Инженерный ползунок в стиле аппаратного фейдера */
+    input[type="range"].cad-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 2px;
+      background: #C7C3B8;
+      outline: none;
+      cursor: pointer;
+    }
+
+    input[type="range"].cad-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 14px;
+      height: 22px;
+      background: var(--ink-primary);
+      border: 1px solid var(--bg-panel);
+      border-radius: 1px;
+      cursor: ew-resize;
+      transition: background-color 0.12s ease;
+    }
+
+    input[type="range"].cad-slider::-webkit-slider-thumb:hover {
+      background: var(--accent-orange);
+    }
+
+    input[type="range"].cad-slider::-moz-range-thumb {
+      width: 14px;
+      height: 22px;
+      background: var(--ink-primary);
+      border: 1px solid var(--bg-panel);
+      border-radius: 1px;
+      cursor: ew-resize;
+    }
+
+    /* Угловые видоискатели вьюпорта */
+    .reticle-corner {
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      pointer-events: none;
+      z-index: 15;
+    }
+    .reticle-tl { top: 14px; left: 14px; border-top: 1.5px solid #18181B; border-left: 1.5px solid #18181B; }
+    .reticle-tr { top: 14px; right: 14px; border-top: 1.5px solid #18181B; border-right: 1.5px solid #18181B; }
+    .reticle-bl { bottom: 14px; left: 14px; border-bottom: 1.5px solid #18181B; border-left: 1.5px solid #18181B; }
+    .reticle-br { bottom: 14px; right: 14px; border-bottom: 1.5px solid #18181B; border-right: 1.5px solid #18181B; }
+
+    #canvas-container {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      min-height: 440px;
+      touch-action: none;
+      background-color: var(--bg-viewport);
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      outline: none;
+    }
+  </style>
+</head>
+<body class="min-h-screen lg:h-screen lg:overflow-hidden flex flex-col lg:flex-row">
+
+  <!-- ЛЕВАЯ ЧАСТЬ (~68%): 3D-ВЬЮПОРТ -->
+  <section class="relative w-full lg:w-[68%] h-[56vh] min-h-[440px] lg:h-full flex flex-col border-b lg:border-b-0 lg:border-r border-[#D6D3CB]">
+    
+    <!-- Видоискатели по углам -->
+    <div class="reticle-corner reticle-tl"></div>
+    <div class="reticle-corner reticle-tr"></div>
+    <div class="reticle-corner reticle-bl"></div>
+    <div class="reticle-corner reticle-br"></div>
+
+    <!-- Левый верхний угол: Код изделия и подсказка управления -->
+    <div class="absolute top-6 left-7 z-20 pointer-events-none max-w-[70%]">
+      <div class="inline-flex items-center gap-2 mb-1">
+        <span class="w-2 h-2 bg-[#E84C22] inline-block"></span>
+        <span class="font-mono-tech text-xs font-semibold tracking-wider text-[#18181B]">
+          UNIT-04 // SENSOR MODULE
+        </span>
+      </div>
+      <p class="text-[11px] sm:text-xs text-[#6E6D68] leading-snug">
+        ЛКМ — вращение &nbsp;·&nbsp; Колесо — зум &nbsp;·&nbsp; ПКМ — панорамирование
+      </p>
+    </div>
+
+    <!-- Правый верхний угол: Сброс вида -->
+    <div class="absolute top-6 right-7 z-20">
+      <button id="btn-reset-view" type="button"
+        class="font-mono-tech text-[11px] uppercase tracking-wider px-3 py-1.5 bg-[#F8F7F4] text-[#18181B] border border-[#D6D3CB] hover:border-[#18181B] hover:bg-[#18181B] hover:text-[#F8F7F4] transition-colors cursor-pointer">
+        Сброс вида
+      </button>
+    </div>
+
+    <!-- WebGL Canvas -->
+    <div id="canvas-container" class="flex-1 w-full h-full"></div>
+
+    <!-- Левый нижний угол: Техническая строка телеметрии -->
+    <div class="absolute bottom-6 left-7 z-20 bg-[#F8F7F4]/95 border border-[#D6D3CB] px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono-tech">
+      <div class="flex items-center gap-1.5">
+        <span class="text-[#6E6D68]">FPS</span>
+        <span id="hud-fps" class="font-bold text-[#18181B]">60</span>
+      </div>
+      <span class="text-[#D6D3CB]">|</span>
+      <div class="flex items-center gap-1.5">
+        <span class="text-[#6E6D68]">MS</span>
+        <span id="hud-ms" class="font-bold text-[#E84C22]">16.7 ms</span>
+      </div>
+      <span class="text-[#D6D3CB]">|</span>
+      <div class="flex items-center gap-1.5">
+        <span class="text-[#6E6D68]">TRIS</span>
+        <span id="hud-tris" class="font-bold text-[#18181B]">0</span>
+      </div>
+      <span class="text-[#D6D3CB]">|</span>
+      <div class="flex items-center gap-1.5">
+        <span class="text-[#6E6D68]">DRAW CALLS</span>
+        <span id="hud-calls" class="font-bold text-[#18181B]">0</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ПРАВАЯ ЧАСТЬ (~32%): ИНСПЕКТОР СЦЕНЫ -->
+  <aside class="w-full lg:w-[32%] lg:h-full bg-[#F8F7F4] flex flex-col lg:overflow-y-auto divide-y divide-[#D6D3CB]">
+
+    <!-- Шапка инспектора -->
+    <header class="px-6 py-5">
+      <div class="flex items-center justify-between mb-1">
+        <span class="font-mono-tech text-[11px] font-semibold tracking-widest text-[#E84C22] uppercase">
+          CAD / WEBGL INSPECTOR
+        </span>
+        <span class="font-mono-tech text-[11px] text-[#6E6D68]">REV 2.4</span>
+      </div>
+      <h1 class="text-base sm:text-lg font-bold tracking-tight text-[#18181B]">
+        WEB 3D // ИНСПЕКТОР СЦЕНЫ
+      </h1>
+      <p class="text-xs text-[#6E6D68] mt-1 leading-relaxed">
+        Интерактивный стенд: разборка узлов, настройка PBR-поверхностей и контроль геометрии в реальном времени.
+      </p>
+    </header>
+
+    <!-- СЕКЦИЯ 01: ВЗРЫВ-СХЕМА -->
+    <section class="px-6 py-5">
+      <div class="flex items-center justify-between mb-2">
+        <span class="font-mono-tech text-xs font-semibold tracking-wider text-[#18181B]">
+          01 // ВЗРЫВ-СХЕМА (DISASSEMBLY)
+        </span>
+        <span id="explode-val" class="font-mono-tech text-xs font-bold px-2 py-0.5 bg-[#18181B] text-[#F8F7F4]">
+          0%
+        </span>
+      </div>
+      <p class="text-xs text-[#6E6D68] mb-4 leading-relaxed">
+        Смещение корпусных элементов и линзы вдоль конструктивных осей для осмотра внутренней платы.
+      </p>
+
+      <div class="mb-4">
+        <input id="slider-explode" type="range" min="0" max="100" value="0" class="cad-slider" />
+        <div class="flex justify-between font-mono-tech text-[10px] text-[#6E6D68] mt-1.5">
+          <span>0% СБОРКА</span>
+          <span>50%</span>
+          <span>100% РАЗБОР</span>
+        </div>
+      </div>
+
+      <button id="btn-explode-toggle" type="button"
+        class="w-full py-2.5 px-4 font-mono-tech text-xs font-semibold uppercase tracking-wider bg-[#18181B] text-[#F8F7F4] hover:bg-[#E84C22] transition-colors cursor-pointer">
+        Разобрать / Собрать
+      </button>
+    </section>
+
+    <!-- СЕКЦИЯ 02: МАТЕРИАЛЫ И ЦВЕТ (PBR) -->
+    <section class="px-6 py-5">
+      <div class="mb-2">
+        <span class="font-mono-tech text-xs font-semibold tracking-wider text-[#18181B]">
+          02 // МАТЕРИАЛЫ И ЦВЕТ (PBR)
+        </span>
+      </div>
+      <p class="text-xs text-[#6E6D68] mb-3 leading-relaxed">
+        Изменение параметров шейдера без перезагрузки геометрии и текстур.
+      </p>
+
+      <!-- Выбор цвета корпуса -->
+      <div class="font-mono-tech text-[11px] uppercase tracking-wider text-[#6E6D68] mb-2">
+        Покрытие верхнего кожуха
+      </div>
+      <div class="grid grid-cols-2 gap-2 mb-4" id="swatch-grid">
+        <button type="button" data-color="#ECEAE4"
+          class="swatch-item active flex items-center gap-2.5 px-3 py-2 border border-[#18181B] bg-[#F2F1ED] text-left cursor-pointer transition-colors">
+          <span class="w-4 h-4 shrink-0 border border-[#18181B]/30" style="background-color: #ECEAE4;"></span>
+          <span class="text-xs font-medium text-[#18181B] truncate">Студийный белый</span>
+        </button>
+
+        <button type="button" data-color="#27272A"
+          class="swatch-item flex items-center gap-2.5 px-3 py-2 border border-[#D6D3CB] bg-[#F8F7F4] hover:border-[#18181B] text-left cursor-pointer transition-colors">
+          <span class="w-4 h-4 shrink-0 border border-[#18181B]/30" style="background-color: #27272A;"></span>
+          <span class="text-xs font-medium text-[#18181B] truncate">Графит</span>
+        </button>
+
+        <button type="button" data-color="#E84C22"
+          class="swatch-item flex items-center gap-2.5 px-3 py-2 border border-[#D6D3CB] bg-[#F8F7F4] hover:border-[#18181B] text-left cursor-pointer transition-colors">
+          <span class="w-4 h-4 shrink-0 border border-[#18181B]/30" style="background-color: #E84C22;"></span>
+          <span class="text-xs font-medium text-[#18181B] truncate">Оранжевый</span>
+        </button>
+
+        <button type="button" data-color="#55624C"
+          class="swatch-item flex items-center gap-2.5 px-3 py-2 border border-[#D6D3CB] bg-[#F8F7F4] hover:border-[#18181B] text-left cursor-pointer transition-colors">
+          <span class="w-4 h-4 shrink-0 border border-[#18181B]/30" style="background-color: #55624C;"></span>
+          <span class="text-xs font-medium text-[#18181B] truncate">Оливковый хаки</span>
+        </button>
+      </div>
+
+      <!-- Выбор фактуры PBR -->
+      <div class="font-mono-tech text-[11px] uppercase tracking-wider text-[#6E6D68] mb-2">
+        Фактура (Roughness / Metalness)
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <button id="btn-pbr-polymer" type="button"
+          class="py-2 px-3 text-xs font-medium border border-[#18181B] bg-[#18181B] text-[#F8F7F4] cursor-pointer transition-colors">
+          Матовый полимер
+        </button>
+        <button id="btn-pbr-metal" type="button"
+          class="py-2 px-3 text-xs font-medium border border-[#D6D3CB] bg-[#F8F7F4] text-[#18181B] hover:border-[#18181B] cursor-pointer transition-colors">
+          Анодированный металл
+        </button>
+      </div>
+    </section>
+
+    <!-- СЕКЦИЯ 03: ГЕОМЕТРИЯ И ОПТИМИЗАЦИЯ -->
+    <section class="px-6 py-5">
+      <div class="mb-2">
+        <span class="font-mono-tech text-xs font-semibold tracking-wider text-[#18181B]">
+          03 // ГЕОМЕТРИЯ И ОПТИМИЗАЦИЯ
+        </span>
+      </div>
+      <p class="text-xs text-[#6E6D68] mb-3 leading-relaxed">
+        Сравнение плотной и оптимизированной полигональной сетки (следите за счётчиком TRIS).
+      </p>
+
+      <div class="font-mono-tech text-[11px] uppercase tracking-wider text-[#6E6D68] mb-2">
+        Уровень детализации (LOD)
+      </div>
+      <div class="grid grid-cols-2 gap-2 mb-3">
+        <button id="btn-lod-high" type="button"
+          class="font-mono-tech py-2 px-3 text-xs font-semibold border border-[#18181B] bg-[#18181B] text-[#F8F7F4] cursor-pointer transition-colors">
+          High-Poly
+        </button>
+        <button id="btn-lod-low" type="button"
+          class="font-mono-tech py-2 px-3 text-xs font-semibold border border-[#D6D3CB] bg-[#F8F7F4] text-[#18181B] hover:border-[#18181B] cursor-pointer transition-colors">
+          Low-Poly
+        </button>
+      </div>
+
+      <!-- Переключатель Wireframe -->
+      <button id="btn-wireframe" type="button" aria-pressed="false"
+        class="w-full flex items-center justify-between px-3.5 py-2.5 border border-[#D6D3CB] bg-[#F8F7F4] hover:border-[#18181B] transition-colors cursor-pointer">
+        <span class="text-xs font-medium text-[#18181B]">Сетка (Wireframe)</span>
+        <span id="wireframe-status" class="font-mono-tech text-[11px] font-bold px-2 py-0.5 bg-[#ECEAE4] text-[#6E6D68] border border-[#D6D3CB]">
+          OFF
+        </span>
+      </button>
+    </section>
+
+    <!-- СЕКЦИЯ 04: РАКУРСЫ КАМЕРЫ -->
+    <section class="px-6 py-5">
+      <div class="mb-2">
+        <span class="font-mono-tech text-xs font-semibold tracking-wider text-[#18181B]">
+          04 // РАКУРСЫ КАМЕРЫ
+        </span>
+      </div>
+      <p class="text-xs text-[#6E6D68] mb-3 leading-relaxed">
+        Плавный переход камеры к контрольным точкам осмотра изделия.
+      </p>
+
+      <div class="grid grid-cols-3 gap-2">
+        <button type="button" data-preset="iso"
+          class="cam-preset-btn py-2 px-2 text-xs font-medium border border-[#18181B] bg-[#18181B] text-[#F8F7F4] cursor-pointer transition-colors">
+          Изометрия
+        </button>
+        <button type="button" data-preset="front"
+          class="cam-preset-btn py-2 px-2 text-xs font-medium border border-[#D6D3CB] bg-[#F8F7F4] text-[#18181B] hover:border-[#18181B] cursor-pointer transition-colors">
+          Спереди
+        </button>
+        <button type="button" data-preset="lens"
+          class="cam-preset-btn py-2 px-2 text-xs font-medium border border-[#D6D3CB] bg-[#F8F7F4] text-[#18181B] hover:border-[#18181B] cursor-pointer transition-colors">
+          Деталь (линза)
+        </button>
+      </div>
+    </section>
+
+  </aside>
+
+  <!-- ES-модули Three.js (jsDelivr CDN) -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+    // Состояние приложения
+    const state = {
+      explodeTarget: 0,
+      explodeCurrent: 0,
+      isLowPoly: false,
+      wireframe: false,
+      shellColor: '#ECEAE4',
+      isMetal: false,
+      cameraTransition: null
+    };
+
+    // Пресеты камеры
+    const CAMERA_PRESETS = {
+      iso: {
+        pos: new THREE.Vector3(3.4, 2.35, 3.8),
+        target: new THREE.Vector3(0, 0.25, 0)
+      },
+      front: {
+        pos: new THREE.Vector3(0, 0.55, 4.4),
+        target: new THREE.Vector3(0, 0.35, 0)
+      },
+      lens: {
+        pos: new THREE.Vector3(1.15, 0.85, 2.05),
+        target: new THREE.Vector3(0, 0.42, 0.65)
+      }
+    };
+
+    // DOM-элементы
+    const container = document.getElementById('canvas-container');
+    const hudFps = document.getElementById('hud-fps');
+    const hudMs = document.getElementById('hud-ms');
+    const hudTris = document.getElementById('hud-tris');
+    const hudCalls = document.getElementById('hud-calls');
+
+    // 1. Инициализация сцены и рендерера
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color('#F2F1ED');
+
+    const camera = new THREE.PerspectiveCamera(
+      40,
+      container.clientWidth / container.clientHeight,
+      0.1,
+      100
+    );
+    camera.position.copy(CAMERA_PRESETS.iso.pos);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+    container.appendChild(renderer.domElement);
+
+    // 2. Студийный PMREM-энвайронмент (RoomEnvironment) для естественных отражений
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    const roomEnv = new RoomEnvironment();
+    const envRT = pmremGenerator.fromScene(roomEnv, 0.04);
+    scene.environment = envRT.texture;
+    scene.environmentIntensity = 0.65;
+    roomEnv.dispose();
+    pmremGenerator.dispose();
+
+    // 3. OrbitControls с плавным демпфированием
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.copy(CAMERA_PRESETS.iso.target);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.065;
+    controls.minDistance = 1.6;
+    controls.maxDistance = 9.5;
+    controls.maxPolarAngle = Math.PI * 0.49;
+
+    // Прерываем автоперелёт камеры, если пользователь начал крутить сцену вручную
+    controls.addEventListener('start', () => {
+      state.cameraTransition = null;
+    });
+
+    // 4. Студийное трёхточечное освещение
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0xd8d5cc, 0.65);
+    hemiLight.position.set(0, 6, 0);
+    scene.add(hemiLight);
+
+    // Ключевой свет с мягкими тенями
+    const keyLight = new THREE.DirectionalLight(0xfffcf5, 1.9);
+    keyLight.position.set(3.8, 6.2, 4.2);
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.width = 2048;
+    keyLight.shadow.mapSize.height = 2048;
+    keyLight.shadow.camera.near = 1;
+    keyLight.shadow.camera.far = 16;
+    const d = 3.2;
+    keyLight.shadow.camera.left = -d;
+    keyLight.shadow.camera.right = d;
+    keyLight.shadow.camera.top = d;
+    keyLight.shadow.camera.bottom = -d;
+    keyLight.shadow.bias = -0.0005;
+    scene.add(keyLight);
+
+    // Заполняющий свет слева
+    const fillLight = new THREE.DirectionalLight(0xeef2f6, 0.75);
+    fillLight.position.set(-4.5, 2.5, 2.0);
+    scene.add(fillLight);
+
+    // Контурный свет сзади для отделения фасок
+    const rimLight = new THREE.DirectionalLight(0xffffff, 0.9);
+    rimLight.position.set(-1.5, 4.0, -4.5);
+    scene.add(rimLight);
+
+    // 5. Координатная CAD-сетка и плоскость контактной тени
+    const cadGrid = new THREE.GridHelper(10, 40, 0xb8b4a8, 0xdcd9d0);
+    cadGrid.position.y = 0;
+    scene.add(cadGrid);
+
+    const shadowReceiver = new THREE.Mesh(
+      new THREE.PlaneGeometry(10, 10),
+      new THREE.ShadowMaterial({ opacity: 0.16 })
+    );
+    shadowReceiver.rotation.x = -Math.PI / 2;
+    shadowReceiver.position.y = 0.001;
+    shadowReceiver.receiveShadow = true;
+    scene.add(shadowReceiver);
+
+    // 6. PBR-материалы конструктивных элементов
+    const materials = {
+      // Верхний съёмный кожух (настраивается пользователем)
+      shell: new THREE.MeshStandardMaterial({
+        color: new THREE.Color(state.shellColor),
+        roughness: 0.62,
+        metalness: 0.08
+      }),
+      // Нижнее шасси из анодированного тёмного алюминия
+      chassis: new THREE.MeshStandardMaterial({
+        color: 0x222326,
+        roughness: 0.36,
+        metalness: 0.85
+      }),
+      // Резиновые опоры и уплотнители
+      rubber: new THREE.MeshStandardMaterial({
+        color: 0x141416,
+        roughness: 0.88,
+        metalness: 0.05
+      }),
+      // Нержавеющая сталь (винты, оправа линзы, энкодер)
+      steel: new THREE.MeshStandardMaterial({
+        color: 0xd4d4d8,
+        roughness: 0.24,
+        metalness: 0.92
+      }),
+      // Текстолит печатной платы (PCB)
+      pcbBoard: new THREE.MeshStandardMaterial({
+        color: 0x1b3b2b,
+        roughness: 0.48,
+        metalness: 0.15
+      }),
+      // Медные дорожки и контакты
+      copper: new THREE.MeshStandardMaterial({
+        color: 0xc87d4b,
+        roughness: 0.28,
+        metalness: 0.9
+      }),
+      // Корпуса микросхем
+      chipBlack: new THREE.MeshStandardMaterial({
+        color: 0x18181b,
+        roughness: 0.55,
+        metalness: 0.1
+      }),
+      // Промышленный оранжевый акцент (защёлки, метка энкодера)
+      accentOrange: new THREE.MeshStandardMaterial({
+        color: 0xE84C22,
+        roughness: 0.42,
+        metalness: 0.12
+      }),
+      // Полупрозрачный оптический купол линзы
+      lensGlass: new THREE.MeshPhysicalMaterial({
+        color: 0xffffff,
+        roughness: 0.06,
+        metalness: 0.0,
+        transmission: 0.86,
+        ior: 1.49,
+        thickness: 0.35,
+        transparent: true,
+        opacity: 0.95
+      })
+    };
+
+    // Вспомогательная функция создания скруглённого корпуса (ExtrudeGeometry со скошенной фаской)
+    function createChamferedBox(width, height, depth, radius, bevelSize, curveSegments, bevelSegments) {
+      const shape = new THREE.Shape();
+      const hw = width / 2 - radius;
+      const hd = depth / 2 - radius;
+
+      shape.moveTo(-hw, -hd - radius);
+      shape.lineTo(hw, -hd - radius);
+      shape.quadraticCurveTo(hw + radius, -hd - radius, hw + radius, -hd);
+      shape.lineTo(hw + radius, hd);
+      shape.quadraticCurveTo(hw + radius, hd + radius, hw, hd + radius);
+      shape.lineTo(-hw, hd + radius);
+      shape.quadraticCurveTo(-hw - radius, hd + radius, -hw - radius, hd);
+      shape.lineTo(-hw - radius, -hd);
+      shape.quadraticCurveTo(-hw - radius, -hd - radius, -hw, -hd - radius);
+
+      const geom = new THREE.ExtrudeGeometry(shape, {
+        depth: height,
+        bevelEnabled: true,
+        bevelSegments: bevelSegments,
+        steps: 1,
+        bevelSize: bevelSize,
+        bevelThickness: bevelSize,
+        curveSegments: curveSegments
+      });
+      geom.rotateX(-Math.PI / 2);
+      return geom;
+    }
+
+    // Корневой контейнер устройства и список узлов для взрыв-схемы
+    const unitRoot = new THREE.Group();
+    scene.add(unitRoot);
+    let assemblyNodes = [];
+
+    // Процедурная сборка 3D-модели UNIT-04 с поддержкой High-Poly и Low-Poly
+    function buildSensorUnit(lowPoly) {
+      // Очищаем предыдущую геометрию
+      unitRoot.traverse((obj) => {
+        if (obj.isMesh && obj.geometry) {
+          obj.geometry.dispose();
+        }
+      });
+      while (unitRoot.children.length > 0) {
+        unitRoot.remove(unitRoot.children[0]);
+      }
+      assemblyNodes = [];
+
+      // Параметры сегментации (ключевое отличие High-Poly от Low-Poly)
+      const curveSeg = lowPoly ? 2 : 14;
+      const bevelSeg = lowPoly ? 1 : 5;
+      const cylSeg = lowPoly ? 10 : 48;
+      const sphereSeg = lowPoly ? 12 : 40;
+      const screwSeg = lowPoly ? 6 : 18;
+
+      // =========================================================
+      // УЗЕЛ A: НИЖНЕЕ ШАССИ ИЗ АНОДИРОВАННОГО АЛЮМИНИЯ + НОЖКИ + ВИНТЫ
+      // =========================================================
+      const chassisGroup = new THREE.Group();
+
+      // Резиновые ножки по углам (опираются на плоскость y = 0)
+      const footGeom = new THREE.CylinderGeometry(0.11, 0.13, 0.05, cylSeg);
+      const footOffsets = [
+        [-0.92, 0.025, -0.68],
+        [0.92, 0.025, -0.68],
+        [-0.92, 0.025, 0.68],
+        [0.92, 0.025, 0.68]
+      ];
+      footOffsets.forEach(([fx, fy, fz]) => {
+        const foot = new THREE.Mesh(footGeom, materials.rubber);
+        foot.position.set(fx, fy, fz);
+        foot.castShadow = true;
+        chassisGroup.add(foot);
+      });
+
+      // Алюминиевая плита основания
+      const basePlateGeom = createChamferedBox(2.2, 0.14, 1.7, 0.14, 0.025, curveSeg, bevelSeg);
+      const basePlate = new THREE.Mesh(basePlateGeom, materials.chassis);
+      basePlate.position.y = 0.075;
+      basePlate.castShadow = true;
+      basePlate.receiveShadow = true;
+      chassisGroup.add(basePlate);
+
+      // 4 стальных винта с головкой под шестигранник по углам шасси
+      const screwGeom = new THREE.CylinderGeometry(0.042, 0.042, 0.025, screwSeg);
+      footOffsets.forEach(([sx, , sz]) => {
+        const screw = new THREE.Mesh(screwGeom, materials.steel);
+        screw.position.set(sx, 0.24, sz);
+        chassisGroup.add(screw);
+      });
+
+      unitRoot.add(chassisGroup);
+      assemblyNodes.push({
+        group: chassisGroup,
+        basePos: new THREE.Vector3(0, 0, 0),
+        explodeOffset: new THREE.Vector3(0, 0, 0) // База остаётся на полу
+      });
+
+      // =========================================================
+      // УЗЕЛ B: ВНУТРЕННЯЯ ПЕЧАТНАЯ ПЛАТА (PCB) С КОМПОНЕНТАМИ
+      // =========================================================
+      const pcbGroup = new THREE.Group();
+
+      // Текстолитовая плата
+      const boardMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(1.94, 0.04, 1.44),
+        materials.pcbBoard
+      );
+      boardMesh.castShadow = true;
+      boardMesh.receiveShadow = true;
+      pcbGroup.add(boardMesh);
+
+      // Центральный микроконтроллер (ARM SoC)
+      const mcuMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.46, 0.045, 0.46),
+        materials.chipBlack
+      );
+      mcuMesh.position.set(-0.22, 0.04, 0.05);
+      pcbGroup.add(mcuMesh);
+
+      // Медная рамка обвязки вокруг микроконтроллера
+      const copperPad = new THREE.Mesh(
+        new THREE.BoxGeometry(0.54, 0.012, 0.54),
+        materials.copper
+      );
+      copperPad.position.set(-0.22, 0.022, 0.05);
+      pcbGroup.add(copperPad);
+
+      // Электролитические конденсаторы
+      const capGeom = new THREE.CylinderGeometry(0.065, 0.065, 0.16, cylSeg);
+      const capCoords = [
+        [0.45, 0.1, -0.38],
+        [0.64, 0.1, -0.38],
+        [0.45, 0.1, -0.18],
+        [-0.72, 0.1, -0.42]
+      ];
+      capCoords.forEach(([cx, cy, cz]) => {
+        const cap = new THREE.Mesh(capGeom, materials.steel);
+        cap.position.set(cx, cy, cz);
+        pcbGroup.add(cap);
+      });
+
+      // Медные дорожки на плате
+      const traceGeom = new THREE.BoxGeometry(0.75, 0.008, 0.022);
+      for (let i = 0; i < 5; i++) {
+        const trace = new THREE.Mesh(traceGeom, materials.copper);
+        trace.position.set(0.18, 0.022, 0.18 + i * 0.075);
+        pcbGroup.add(trace);
+      }
+
+      // Интерфейсные разъёмы USB-C / Sensor Bus на задней кромке платы
+      const portGeom = new THREE.BoxGeometry(0.24, 0.09, 0.18);
+      [-0.45, 0.0, 0.45].forEach((px) => {
+        const port = new THREE.Mesh(portGeom, materials.steel);
+        port.position.set(px, 0.06, -0.65);
+        pcbGroup.add(port);
+      });
+
+      const pcbBasePos = new THREE.Vector3(0, 0.27, 0);
+      pcbGroup.position.copy(pcbBasePos);
+      unitRoot.add(pcbGroup);
+      assemblyNodes.push({
+        group: pcbGroup,
+        basePos: pcbBasePos,
+        explodeOffset: new THREE.Vector3(0, 0.42, 0) // Приподнимается над шасси
+      });
+
+      // =========================================================
+      // УЗЕЛ C: ВЕРХНИЙ СЪЁМНЫЙ КОЖУХ С ВЕНТИЛЯЦИЕЙ И ЗАЩЁЛКАМИ
+      // =========================================================
+      const shellGroup = new THREE.Group();
+
+      // Основной объём кожуха со скошенной фаской
+      const mainShellGeom = createChamferedBox(2.16, 0.56, 1.66, 0.14, 0.035, curveSeg, bevelSeg);
+      const mainShell = new THREE.Mesh(mainShellGeom, materials.shell);
+      mainShell.castShadow = true;
+      mainShell.receiveShadow = true;
+      shellGroup.add(mainShell);
+
+      // Вентиляционные прорези на верхней грани (тёмные ламели)
+      const ventGeom = new THREE.BoxGeometry(0.56, 0.025, 0.032);
+      for (let i = 0; i < 6; i++) {
+        const vent = new THREE.Mesh(ventGeom, materials.chassis);
+        vent.position.set(-0.58, 0.59, -0.35 + i * 0.14);
+        shellGroup.add(vent);
+      }
+
+      // Оранжевые сервисные защёлки на левой и правой боковинах
+      const latchGeom = new THREE.BoxGeometry(0.05, 0.14, 0.34);
+      [-1.1, 1.1].forEach((lx) => {
+        const latch = new THREE.Mesh(latchGeom, materials.accentOrange);
+        latch.position.set(lx, 0.14, 0);
+        shellGroup.add(latch);
+      });
+
+      const shellBasePos = new THREE.Vector3(0, 0.25, 0);
+      shellGroup.position.copy(shellBasePos);
+      unitRoot.add(shellGroup);
+      assemblyNodes.push({
+        group: shellGroup,
+        basePos: shellBasePos,
+        explodeOffset: new THREE.Vector3(0, 1.12, 0) // Поднимается высоко вверх, открывая плату
+      });
+
+      // =========================================================
+      // УЗЕЛ D: ЦЕНТРАЛЬНЫЙ ОПТИЧЕСКИЙ / АКУСТИЧЕСКИЙ УЗЕЛ ЛИНЗЫ
+      // =========================================================
+      const lensGroup = new THREE.Group();
+
+      // Внешнее металлическое кольцо-оправа
+      const bezelMesh = new THREE.Mesh(
+        new THREE.TorusGeometry(0.34, 0.045, lowPoly ? 8 : 22, cylSeg),
+        materials.steel
+      );
+      bezelMesh.castShadow = true;
+      lensGroup.add(bezelMesh);
+
+      // Внутренний тубус объектива из тёмного анодированного алюминия
+      const barrelMesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.31, 0.31, 0.16, cylSeg, 1, true),
+        materials.chassis
+      );
+      barrelMesh.rotation.x = Math.PI / 2;
+      barrelMesh.position.z = -0.04;
+      lensGroup.add(barrelMesh);
+
+      // Внутренняя диафрагма-сенсор
+      const sensorCore = new THREE.Mesh(
+        new THREE.CircleGeometry(0.28, cylSeg),
+        materials.rubber
+      );
+      sensorCore.position.z = -0.06;
+      lensGroup.add(sensorCore);
+
+      // Полупрозрачный стеклянный купол линзы
+      const glassDome = new THREE.Mesh(
+        new THREE.SphereGeometry(0.305, sphereSeg, sphereSeg, 0, Math.PI * 2, 0, Math.PI * 0.42),
+        materials.lensGlass
+      );
+      glassDome.rotation.x = Math.PI / 2;
+      glassDome.position.z = -0.14;
+      lensGroup.add(glassDome);
+
+      const lensBasePos = new THREE.Vector3(0.36, 0.54, 0.86);
+      lensGroup.position.copy(lensBasePos);
+      unitRoot.add(lensGroup);
+      assemblyNodes.push({
+        group: lensGroup,
+        basePos: lensBasePos,
+        explodeOffset: new THREE.Vector3(0, 0.35, 1.05) // Выдвигается вперёд по оси Z
+      });
+
+      // =========================================================
+      // УЗЕЛ E: БОКОВОЙ РАДИАТОР С РЕБРИСТЫМИ ПЛАСТИНАМИ
+      // =========================================================
+      const heatsinkGroup = new THREE.Group();
+
+      // Основание радиатора
+      const hsBase = new THREE.Mesh(
+        new THREE.BoxGeometry(0.06, 0.34, 0.88),
+        materials.chassis
+      );
+      hsBase.castShadow = true;
+      heatsinkGroup.add(hsBase);
+
+      // Ребристые охлаждающие пластины
+      const finCount = lowPoly ? 5 : 11;
+      const finGeom = new THREE.BoxGeometry(0.11, 0.34, 0.026);
+      for (let i = 0; i < finCount; i++) {
+        const t = finCount === 1 ? 0 : i / (finCount - 1) - 0.5;
+        const fin = new THREE.Mesh(finGeom, materials.chassis);
+        fin.position.set(-0.06, 0, t * 0.82);
+        fin.castShadow = true;
+        heatsinkGroup.add(fin);
+      }
+
+      const hsBasePos = new THREE.Vector3(-1.12, 0.54, 0);
+      heatsinkGroup.position.copy(hsBasePos);
+      unitRoot.add(heatsinkGroup);
+      assemblyNodes.push({
+        group: heatsinkGroup,
+        basePos: hsBasePos,
+        explodeOffset: new THREE.Vector3(-0.95, 0.35, 0) // Сдвигается влево по оси -X
+      });
+
+      // =========================================================
+      // УЗЕЛ F: ПОВОРОТНЫЙ ЭНКОДЕР С НАСЕЧКАМИ И ИНДИКАТОРОМ
+      // =========================================================
+      const encoderGroup = new THREE.Group();
+
+      // Основание-шайба энкодера
+      const collar = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.24, 0.26, 0.04, cylSeg),
+        materials.chassis
+      );
+      encoderGroup.add(collar);
+
+      // Ручка энкодера
+      const knob = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.20, 0.21, 0.16, cylSeg),
+        materials.steel
+      );
+      knob.position.y = 0.09;
+      knob.castShadow = true;
+      encoderGroup.add(knob);
+
+      // Насечки (рифление) по окружности ручки
+      const knurlCount = lowPoly ? 8 : 24;
+      const knurlGeom = new THREE.BoxGeometry(0.015, 0.14, 0.025);
+      for (let i = 0; i < knurlCount; i++) {
+        const angle = (i / knurlCount) * Math.PI * 2;
+        const knurl = new THREE.Mesh(knurlGeom, materials.chassis);
+        knurl.position.set(Math.cos(angle) * 0.205, 0.09, Math.sin(angle) * 0.205);
+        knurl.rotation.y = -angle;
+        encoderGroup.add(knurl);
+      }
+
+      // Оранжевая риска-указатель сверху
+      const marker = new THREE.Mesh(
+        new THREE.BoxGeometry(0.024, 0.015, 0.12),
+        materials.accentOrange
+      );
+      marker.position.set(0, 0.175, 0.06);
+      encoderGroup.add(marker);
+
+      const encoderBasePos = new THREE.Vector3(0.52, 0.85, -0.34);
+      encoderGroup.position.copy(encoderBasePos);
+      unitRoot.add(encoderGroup);
+      assemblyNodes.push({
+        group: encoderGroup,
+        basePos: encoderBasePos,
+        explodeOffset: new THREE.Vector3(0.55, 1.45, 0) // Поднимается вверх и чуть вправо
+      });
+
+      applyWireframe();
+    }
+
+    function applyWireframe() {
+      Object.values(materials).forEach((mat) => {
+        mat.wireframe = state.wireframe;
+      });
+    }
+
+    // Первичная сборка в High-Poly
+    buildSensorUnit(false);
+
+    // 7. Обработчики элементов управления инспектора
+    // Сброс вида
+    document.getElementById('btn-reset-view').addEventListener('click', () => {
+      flyToPreset('iso');
+    });
+
+    // Секция 01: Взрыв-схема
+    const sliderExplode = document.getElementById('slider-explode');
+    const explodeValLabel = document.getElementById('explode-val');
+    const btnExplodeToggle = document.getElementById('btn-explode-toggle');
+
+    function setExplodePercent(pct) {
+      const clamped = Math.max(0, Math.min(100, pct));
+      sliderExplode.value = clamped;
+      explodeValLabel.textContent = `${clamped}%`;
+      state.explodeTarget = clamped / 100;
+    }
+
+    sliderExplode.addEventListener('input', (e) => {
+      setExplodePercent(Number(e.target.value));
+    });
+
+    btnExplodeToggle.addEventListener('click', () => {
+      setExplodePercent(state.explodeTarget > 0.5 ? 0 : 100);
+    });
+
+    // Секция 02: Цвет корпуса
+    const swatchItems = document.querySelectorAll('.swatch-item');
+    swatchItems.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        swatchItems.forEach((el) => {
+          el.classList.remove('border-[#18181B]', 'bg-[#F2F1ED]');
+          el.classList.add('border-[#D6D3CB]', 'bg-[#F8F7F4]');
+        });
+        btn.classList.remove('border-[#D6D3CB]', 'bg-[#F8F7F4]');
+        btn.classList.add('border-[#18181B]', 'bg-[#F2F1ED]');
+
+        state.shellColor = btn.dataset.color;
+        materials.shell.color.set(state.shellColor);
+      });
+    });
+
+    // Секция 02: Фактура PBR
+    const btnPolymer = document.getElementById('btn-pbr-polymer');
+    const btnMetal = document.getElementById('btn-pbr-metal');
+
+    function updatePbrButtons(isMetal) {
+      state.isMetal = isMetal;
+      if (isMetal) {
+        materials.shell.roughness = 0.26;
+        materials.shell.metalness = 0.86;
+        btnMetal.className = 'py-2 px-3 text-xs font-medium border border-[#18181B] bg-[#18181B] text-[#F8F7F4] cursor-pointer transition-colors';
+        btnPolymer.className = 'py-2 px-3 text-xs font-medium border border-[#D6D3CB] bg-[#F8F7F4] text-[#18181B] hover:border-[#18181B] cursor-pointer transition-colors';
+      } else {
+        materials.shell.roughness = 0.62;
+        materials.shell.metalness = 0.08;
+        btnPolymer.className = 'py-2 px-3 text-xs font-medium border border-[#18181B] bg-[#18181B] text-[#F8F7F4] cursor-pointer transition-colors';
+        btnMetal.className = 'py-2 px-3 text-xs font-medium border border-[#D6D3CB] bg-[#F8F7F4] text-[#18181B] hover:border-[#18181B] cursor-pointer transition-colors';
+      }
+    }
+
+    btnPolymer.addEventListener('click', () => updatePbrButtons(false));
+    btnMetal.addEventListener('click', () => updatePbrButtons(true));
+
+    // Секция 03: LOD High-Poly / Low-Poly
+    const btnLodHigh = document.getElementById('btn-lod-high');
+    const btnLodLow = document.getElementById('btn-lod-low');
+
+    function setLodMode(lowPoly) {
+      if (state.isLowPoly === lowPoly) return;
+      state.isLowPoly = lowPoly;
+      buildSensorUnit(lowPoly);
+
+      if (lowPoly) {
+        btnLodLow.className = 'font-mono-tech py-2 px-3 text-xs font-semibold border border-[#18181B] bg-[#18181B] text-[#F8F7F4] cursor-pointer transition-colors';
+        btnLodHigh.className = 'font-mono-tech py-2 px-3 text-xs font-semibold border border-[#D6D3CB] bg-[#F8F7F4] text-[#18181B] hover:border-[#18181B] cursor-pointer transition-colors';
+      } else {
+        btnLodHigh.className = 'font-mono-tech py-2 px-3 text-xs font-semibold border border-[#18181B] bg-[#18181B] text-[#F8F7F4] cursor-pointer transition-colors';
+        btnLodLow.className = 'font-mono-tech py-2 px-3 text-xs font-semibold border border-[#D6D3CB] bg-[#F8F7F4] text-[#18181B] hover:border-[#18181B] cursor-pointer transition-colors';
+      }
+    }
+
+    btnLodHigh.addEventListener('click', () => setLodMode(false));
+    btnLodLow.addEventListener('click', () => setLodMode(true));
+
+    // Секция 03: Wireframe
+    const btnWireframe = document.getElementById('btn-wireframe');
+    const wireframeStatus = document.getElementById('wireframe-status');
+
+    btnWireframe.addEventListener('click', () => {
+      state.wireframe = !state.wireframe;
+      btnWireframe.setAttribute('aria-pressed', String(state.wireframe));
+      applyWireframe();
+
+      if (state.wireframe) {
+        wireframeStatus.textContent = 'ON';
+        wireframeStatus.className = 'font-mono-tech text-[11px] font-bold px-2 py-0.5 bg-[#E84C22] text-[#F8F7F4] border border-[#E84C22]';
+      } else {
+        wireframeStatus.textContent = 'OFF';
+        wireframeStatus.className = 'font-mono-tech text-[11px] font-bold px-2 py-0.5 bg-[#ECEAE4] text-[#6E6D68] border border-[#D6D3CB]';
+      }
+    });
+
+    // Секция 04: Пресеты камеры
+    const presetButtons = document.querySelectorAll('.cam-preset-btn');
+
+    function flyToPreset(key) {
+      const preset = CAMERA_PRESETS[key];
+      if (!preset) return;
+
+      presetButtons.forEach((btn) => {
+        const isCurrent = btn.dataset.preset === key;
+        btn.className = isCurrent
+          ? 'cam-preset-btn py-2 px-2 text-xs font-medium border border-[#18181B] bg-[#18181B] text-[#F8F7F4] cursor-pointer transition-colors'
+          : 'cam-preset-btn py-2 px-2 text-xs font-medium border border-[#D6D3CB] bg-[#F8F7F4] text-[#18181B] hover:border-[#18181B] cursor-pointer transition-colors';
+      });
+
+      state.cameraTransition = {
+        targetPos: preset.pos.clone(),
+        targetLook: preset.target.clone()
+      };
+    }
+
+    presetButtons.forEach((btn) => {
+      btn.addEventListener('click', () => flyToPreset(btn.dataset.preset));
+    });
+
+    // 8. Адаптивный ресайз контейнера (ResizeObserver + window resize)
+    function handleResize() {
+      if (!container) return;
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      if (w === 0 || h === 0) return;
+
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    }
+
+    const resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(container);
+    window.addEventListener('resize', handleResize);
+
+    // 9. Главный цикл рендера и телеметрии
+    let frames = 0;
+    let lastTelemetryTime = performance.now();
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      // Плавная интерполяция взрыв-схемы
+      state.explodeCurrent += (state.explodeTarget - state.explodeCurrent) * 0.12;
+      assemblyNodes.forEach((node) => {
+        node.group.position.copy(node.basePos).addScaledVector(node.explodeOffset, state.explodeCurrent);
+      });
+
+      // Плавный перелёт камеры к выбранному пресету
+      if (state.cameraTransition) {
+        camera.position.lerp(state.cameraTransition.targetPos, 0.08);
+        controls.target.lerp(state.cameraTransition.targetLook, 0.08);
+
+        if (
+          camera.position.distanceTo(state.cameraTransition.targetPos) < 0.01 &&
+          controls.target.distanceTo(state.cameraTransition.targetLook) < 0.01
+        ) {
+          camera.position.copy(state.cameraTransition.targetPos);
+          controls.target.copy(state.cameraTransition.targetLook);
+          state.cameraTransition = null;
+        }
+      }
+
+      controls.update();
+      renderer.render(scene, camera);
+
+      // Обновление телеметрии (FPS, MS, TRIS, DRAW CALLS) каждые 350 мс
+      frames++;
+      const now = performance.now();
+      const elapsed = now - lastTelemetryTime;
+
+      if (elapsed >= 350) {
+        const fps = Math.min(60, Math.round((frames * 1000) / elapsed));
+        const ms = (1000 / Math.max(fps, 1)).toFixed(1);
+
+        hudFps.textContent = String(fps);
+        hudMs.textContent = `${ms} ms`;
+        hudTris.textContent = renderer.info.render.triangles.toLocaleString('ru-RU');
+        hudCalls.textContent = String(renderer.info.render.calls);
+
+        frames = 0;
+        lastTelemetryTime = now;
+      }
+    }
+
+    window.onload = function () {
+      handleResize();
+      animate();
+    };
+  </script>
+</body>
+</html>
